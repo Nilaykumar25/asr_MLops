@@ -13,3 +13,6 @@ celerybeat-schedule*
 figures/
 results/
 sample.wav
+sample.wav
+fake.wav
+program.exe

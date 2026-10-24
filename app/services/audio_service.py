@@ -62,7 +62,9 @@ def submit_audio(db: Session, storage: StorageBackend, user: User, stream: Binar
         info = audio_io.probe(local)
     except audio_io.AudioError as e:
         storage.delete(key)
-        raise BadRequest(f"file is not valid audio: {e}")
+        # the detailed reason (it contains server paths) goes to the log, never to the client
+        log.warning("rejected upload filename=%r user=%s reason=%s", filename, user.username, e)
+        raise BadRequest("file is not valid audio or is corrupted")
     finally:
         if tmpdir:
             tmpdir.cleanup()

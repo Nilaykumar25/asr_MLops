@@ -12,3 +12,4 @@ eval/data/
 celerybeat-schedule*
 figures/
 results/
+sample.wav

@@ -1,0 +1,12 @@
+# ---- real model, evaluation, monitoring (Phases 4-6) ----
+numpy>=1.26
+soundfile>=0.12
+faster-whisper>=1.0
+silero-vad>=5.1
+jiwer>=3.0
+mlflow>=2.12
+scipy>=1.11
+pandas>=2.0
+matplotlib>=3.8
+# torch + torchaudio are required by silero-vad. Install the CPU build first:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu

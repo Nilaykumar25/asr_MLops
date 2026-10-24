@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Apps running on your host (Phases 1-6). For the all-in-Docker setup (Phase 7) replace
+  # host.docker.internal with the service names: api, monitor.
+  - job_name: asr-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+
+  - job_name: asr-drift
+    static_configs:
+      - targets: ["host.docker.internal:9102"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]

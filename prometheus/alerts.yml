@@ -1,0 +1,32 @@
+groups:
+  - name: asr
+    rules:
+      - alert: ApiDown
+        expr: up{job="asr-api"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "ASR API is not reachable"}
+
+      - alert: QueueWaitHigh
+        expr: asr_window_stat{metric="queue_wait_s", stat="p95"} > 60
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "p95 queue wait above 60 s: workers cannot keep up"}
+
+      - alert: FailureRatioHigh
+        expr: asr_window_runs{status="failed"} / clamp_min(sum(asr_window_runs), 1) > 0.1
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "More than 10% of recent runs failed"}
+
+      - alert: ConfidenceLow
+        expr: asr_window_stat{metric="avg_logprob", stat="mean"} < -1.0
+        for: 3m
+        labels: {severity: warning}
+        annotations: {summary: "Mean decoder confidence dropped (avg_logprob < -1.0)"}
+
+      - alert: InputDriftDetected
+        expr: asr_drift_detected == 1
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "Input/confidence distribution drifted from the baseline"}

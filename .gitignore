@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+dev.db
+*.db
+mlruns/
+data/
+loadtests/keys.txt
+eval/data/
+.pytest_cache/
+celerybeat-schedule*
+figures/
+results/

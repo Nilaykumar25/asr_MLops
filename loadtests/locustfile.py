@@ -30,6 +30,13 @@ def random_wav(seconds: float, sr: int = 16000) -> bytes:
     return buf.getvalue()
 
 
+def _why(r) -> str:
+    """The real reason a request failed. For connection-level failures (status 0) Locust keeps the
+    exception on r.error; without this, the failure report would only say 'upload 0:'."""
+    err = getattr(r, "error", None)
+    return repr(err) if err else r.text[:100]
+
+
 class _Base(HttpUser):
     abstract = True
     wait_time = between(0.5, 2.0)
@@ -42,7 +49,7 @@ class _Base(HttpUser):
         with self.client.post("/audio", headers=self.headers, name="POST /audio", catch_response=True,
                               files={"file": (f"load{random.randrange(10**9)}.wav", wav, "audio/wav")}) as r:
             if r.status_code != 201:
-                r.failure(f"upload {r.status_code}: {r.text[:100]}")
+                r.failure(f"upload {r.status_code}: {_why(r)}")
                 return None
             audio_id = r.json()["id"]
         with self.client.post(f"/audio/{audio_id}/transcribe", headers=self.headers, json={},
@@ -54,7 +61,7 @@ class _Base(HttpUser):
                     response_length=0, exception=None, context={})
                 return None
             if r.status_code != 202:
-                r.failure(f"transcribe {r.status_code}: {r.text[:100]}")
+                r.failure(f"transcribe {r.status_code}: {_why(r)}")
                 return None
             return r.json()["run_id"]
 

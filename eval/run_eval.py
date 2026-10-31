@@ -1,10 +1,12 @@
 """Experiment grid: model size x simulated sample rate -> WER, latency, RTF, confidence. Logged to MLflow.
 Also answers the research question: do the confidence signals predict per-file errors?
 
-  python -m eval.run_eval --key YOUR_KEY --manifest eval/data/manifest.csv \
+  python -m eval.run_eval --key YOUR_KEY --manifest eval/data/manifest.csv --language en \
          --model-sizes tiny,base,small --sample-rates 16000,8000,4000
 
-The worker must run with MODEL_BACKEND=whisper. Manifest CSV columns: path,reference"""
+The worker must run with MODEL_BACKEND=whisper. Manifest CSV columns: path,reference.
+Manifests made by eval.make_noisy also carry noise and snr_db columns; they are picked up automatically
+and the experiment is labelled e.g. "cafeteria_5db" (clean manifests are labelled "clean")."""
 import argparse
 import csv
 import statistics
@@ -28,10 +30,20 @@ def spearman(xs, ys) -> float:
     """Rank correlation between a confidence signal and per-file WER. Negative for avg_logprob
     means: lower confidence goes with higher error, i.e. the signal is a useful proxy."""
     from scipy.stats import spearmanr
-    pairs = [(x, y) for x, y in zip(xs, ys) if x is not None and y is not None]
+    pairs = [(x, y) for x, y in zip(xs, ys) if x is not None and y is not None and y == y]
     if len(pairs) < 5:
         return float("nan")
     return float(spearmanr([p[0] for p in pairs], [p[1] for p in pairs]).statistic)
+
+
+def detect_condition(rows: list[dict], override: str | None):
+    """Label for this test set: from the manifest's noise/snr_db columns, or 'clean'."""
+    if override:
+        return override, "custom", None
+    if rows and "noise" in rows[0] and "snr_db" in rows[0] and rows[0]["snr_db"] != "":
+        snr = float(rows[0]["snr_db"])
+        return f"{rows[0]['noise']}_{int(snr)}db", rows[0]["noise"], snr
+    return "clean", "none", None
 
 
 def main():
@@ -42,15 +54,20 @@ def main():
     ap.add_argument("--experiment", default="asr-whisper-grid")
     ap.add_argument("--model-sizes", default="small")
     ap.add_argument("--sample-rates", default="16000")
-    ap.add_argument("--dataset-tag", default="librispeech-test-clean")
+    ap.add_argument("--language", help="force a language (en, hi, ...). Strongly recommended for single-language "
+                                       "data: auto-detection on noisy chunks can pick the wrong language")
+    ap.add_argument("--condition", help="override the automatic label of this test set")
+    ap.add_argument("--dataset-tag", default="eval")
     ap.add_argument("--out", default="results")
     ap.add_argument("--no-mlflow", action="store_true")
     a = ap.parse_args()
 
     client = AsrClient(a.api, a.key)
     rows = list(csv.DictReader(open(a.manifest, encoding="utf-8")))
-    print(f"uploading {len(rows)} files ...")
-    audio_ids = [client.upload(r["path"], a.dataset_tag, r["reference"])["id"] for r in rows]
+    condition, noise, snr = detect_condition(rows, a.condition)
+    print(f"test set: {len(rows)} files, condition = {condition}")
+    print("uploading ...")
+    audio_ids = [client.upload(r["path"], f"{a.dataset_tag}-{condition}", r["reference"])["id"] for r in rows]
     refs = [r["reference"] for r in rows]
     Path(a.out).mkdir(parents=True, exist_ok=True)
 
@@ -62,13 +79,14 @@ def main():
     for size in a.model_sizes.split(","):
         for sr in (int(x) for x in a.sample_rates.split(",")):
             config = {"model_size": size, "simulate_sample_rate": None if sr == 16000 else sr}
-            print(f"\n== model={size} sample_rate={sr} ==")
+            if a.language:
+                config["language"] = a.language
+            print(f"\n== condition={condition} model={size} sample_rate={sr} ==")
             run_ids = [client.start(aid, config) for aid in audio_ids]
             results = client.wait_all(run_ids)
             ok = [results[r] for r in run_ids if r in results and results[r]["status"] == "done"]
             hyps = [(results[r]["transcript"] or "") if r in results else "" for r in run_ids]
 
-            # per-file table (also saved as CSV for the report)
             per_file, file_wer, logprobs, nsp = [], [], [], []
             for r, ref, hyp, rid in zip(rows, refs, hyps, run_ids):
                 res = results.get(rid)
@@ -80,7 +98,8 @@ def main():
                 per_file.append({"path": r["path"], "wer": w, "avg_logprob": sig.get("avg_logprob"),
                                  "no_speech_prob": sig.get("no_speech_prob"), "rtf": sig.get("rtf"),
                                  "silence_ratio": sig.get("silence_ratio"), "input_rms": sig.get("input_rms")})
-            csv_path = Path(a.out) / f"{size}_{sr}hz.csv"
+            # file name carries the experiment identity: <condition>_<model>_<rate>hz.csv
+            csv_path = Path(a.out) / f"{condition}_{size}_{sr}hz.csv"
             with open(csv_path, "w", newline="") as f:
                 w_ = csv.DictWriter(f, fieldnames=list(per_file[0]))
                 w_.writeheader()
@@ -99,9 +118,11 @@ def main():
             }
             print({k: round(v, 4) if isinstance(v, float) else v for k, v in metrics.items()})
             if mlflow:
-                with mlflow.start_run(run_name=f"{size}-{sr}hz"):
+                with mlflow.start_run(run_name=f"{condition}-{size}-{sr}hz"):
                     mlflow.log_params({"model_size": size, "sample_rate_hz": sr, "n_files": len(rows),
-                                       "dataset": a.dataset_tag})
+                                       "condition": condition, "noise": noise,
+                                       "snr_db": "clean" if snr is None else snr,
+                                       "language": a.language or "auto"})
                     mlflow.log_metrics({k: float(v) for k, v in metrics.items() if v == v})  # skip NaN
                     mlflow.log_artifact(str(csv_path))
 

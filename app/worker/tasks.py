@@ -42,8 +42,14 @@ def process_run(self, run_id: str):
 
     # 2. do the work
     try:
+        # The first use loads the model weights (and may download them). That is a one-time cost, not
+        # per-file speed, so it is done BEFORE the timer starts and stays out of the real-time factor.
+        model = get_model(run.config)
+        if model.needs_audio:
+            from app.preprocessing.vad import get_vad
+            get_vad()
         t0 = time.perf_counter()
-        out = run_pipeline(run, audio, get_storage(), get_model(run.config))
+        out = run_pipeline(run, audio, get_storage(), model)
         elapsed = time.perf_counter() - t0
     except Exception as exc:
         return _handle_failure(self, run_id, exc)

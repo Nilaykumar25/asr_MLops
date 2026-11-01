@@ -99,3 +99,38 @@ def test_analyze_proxy_finds_a_negative_correlation(tmp_path):
     assert rho < -0.8
     scatter(df, tmp_path / "s.png")
     assert (tmp_path / "s.png").stat().st_size > 1000
+
+
+def test_word_errors_matches_jiwer():
+    from eval.metrics import compute_wer, word_errors
+    ref, hyp = "he hoped there would be stew for dinner", "he hope there would stew for the dinner"
+    errors, words = word_errors(ref, hyp)
+    assert words == 8
+    assert errors / words == pytest.approx(compute_wer([ref], [hyp]))
+    assert word_errors("one two three", "") == (3, 3)           # nothing recognised: every word is an error
+    assert word_errors("Hello, World!", "hello world") == (0, 2)  # punctuation and case are ignored
+
+
+def test_bootstrap_ci_narrows_with_more_files():
+    from eval.metrics import bootstrap_wer_ci
+    np = pytest.importorskip("numpy")
+    rng = np.random.default_rng(1)
+    words_small, words_big = np.full(20, 20), np.full(400, 20)
+    err_small, err_big = rng.binomial(20, 0.05, 20), rng.binomial(20, 0.05, 400)
+    lo1, hi1 = bootstrap_wer_ci(err_small, words_small)
+    lo2, hi2 = bootstrap_wer_ci(err_big, words_big)
+    assert (hi2 - lo2) < (hi1 - lo1)
+    assert lo2 < err_big.sum() / words_big.sum() < hi2
+
+
+def test_paired_bootstrap_detects_a_real_difference_and_not_a_fake_one():
+    from eval.metrics import paired_bootstrap_diff
+    np = pytest.importorskip("numpy")
+    rng = np.random.default_rng(2)
+    words = np.full(300, 20)
+    a = rng.binomial(20, 0.06, 300)
+    better = np.clip(a - rng.binomial(1, 0.35, 300), 0, None)             # B fixes a word in about a third of files
+    diff, lo, hi, p = paired_bootstrap_diff(a, better, words)
+    assert hi < 0 and p > 0.99 and diff < 0
+    diff2, lo2, hi2, _ = paired_bootstrap_diff(a, a.copy(), words)         # identical systems
+    assert diff2 == 0 and lo2 <= 0 <= hi2

@@ -47,10 +47,11 @@ def plot(df: pd.DataFrame, out: Path) -> list[Path]:
 
     best = clean_df[clean_df["sample_rate_hz"] == clean_df["sample_rate_hz"].max()]
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.scatter(best["rtf_mean"], best["wer"] * 100)
+    rtf_col = "rtf_corpus" if "rtf_corpus" in best and best["rtf_corpus"].notna().any() else "rtf_mean"
+    ax.scatter(best[rtf_col], best["wer"] * 100)
     for _, r in best.iterrows():
-        ax.annotate(r["model_size"], (r["rtf_mean"], r["wer"] * 100), textcoords="offset points", xytext=(5, 5))
-    ax.set_xlabel("Real-time factor (lower = faster)")
+        ax.annotate(r["model_size"], (r[rtf_col], r["wer"] * 100), textcoords="offset points", xytext=(5, 5))
+    ax.set_xlabel("Real-time factor: compute time / audio time (lower = faster)")
     ax.set_ylabel("WER (%)")
     ax.set_title("Accuracy vs speed trade-off (16 kHz, clean)")
     ax.grid(alpha=0.3)

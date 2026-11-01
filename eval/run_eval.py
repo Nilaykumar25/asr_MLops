@@ -13,7 +13,7 @@ import statistics
 from pathlib import Path
 
 from eval.client import AsrClient
-from eval.metrics import compute_wer
+from eval.metrics import bootstrap_wer_ci, compute_wer, word_errors
 
 
 def pct(vals, q):
@@ -67,7 +67,9 @@ def main():
     condition, noise, snr = detect_condition(rows, a.condition)
     print(f"test set: {len(rows)} files, condition = {condition}")
     print("uploading ...")
-    audio_ids = [client.upload(r["path"], f"{a.dataset_tag}-{condition}", r["reference"])["id"] for r in rows]
+    uploads = [client.upload(r["path"], f"{a.dataset_tag}-{condition}", r["reference"]) for r in rows]
+    audio_ids = [u["id"] for u in uploads]
+    durations = [u["duration_seconds"] for u in uploads]
     refs = [r["reference"] for r in rows]
     Path(a.out).mkdir(parents=True, exist_ok=True)
 
@@ -92,10 +94,12 @@ def main():
                 res = results.get(rid)
                 sig = (res or {}).get("signals", {})
                 w = compute_wer([ref], [hyp]) if ref.strip() else float("nan")
+                n_err, n_words = word_errors(ref, hyp) if ref.strip() else (0, 0)
                 file_wer.append(w)
                 logprobs.append(sig.get("avg_logprob"))
                 nsp.append(sig.get("no_speech_prob"))
-                per_file.append({"path": r["path"], "wer": w, "avg_logprob": sig.get("avg_logprob"),
+                per_file.append({"path": r["path"], "wer": w, "errors": n_err, "ref_words": n_words,
+                                 "avg_logprob": sig.get("avg_logprob"),
                                  "no_speech_prob": sig.get("no_speech_prob"), "rtf": sig.get("rtf"),
                                  "silence_ratio": sig.get("silence_ratio"), "input_rms": sig.get("input_rms")})
             # file name carries the experiment identity: <condition>_<model>_<rate>hz.csv
@@ -105,9 +109,24 @@ def main():
                 w_.writeheader()
                 w_.writerows(per_file)
 
+            # corpus RTF = total compute time / total audio time (the honest throughput figure; the mean of
+            # per-file RTFs is inflated by fixed per-file overhead on short clips)
+            done_pairs = [(results[r]["signals"]["rtf"] * d, d) for r, d in zip(run_ids, durations)
+                          if r in results and results[r]["status"] == "done" and results[r]["signals"]["rtf"] is not None]
+            rtf_corpus = (sum(c for c, _ in done_pairs) / sum(d for _, d in done_pairs)) if done_pairs else float("nan")
+            scored = [(f["errors"], f["ref_words"]) for f in per_file if f["ref_words"] > 0]
+            ci_low, ci_high = bootstrap_wer_ci([e for e, _ in scored], [n for _, n in scored])
             metrics = {
                 "wer": compute_wer(refs, hyps),
+                "wer_ci_low": ci_low,
+                "wer_ci_high": ci_high,
+                "ref_words": float(sum(n for _, n in scored)),
+                "rtf_corpus": rtf_corpus,
                 "rtf_mean": mean([r["signals"]["rtf"] for r in ok]),
+                "processing_p50_s": pct([r["timings"]["processing_s"] for r in ok], 0.50),
+                "processing_p95_s": pct([r["timings"]["processing_s"] for r in ok], 0.95),
+                # total latency includes QUEUE WAIT: all files are submitted at once, so this is dominated by the
+                # backlog and says little about speed. Use rtf_corpus / processing_* for speed.
                 "latency_p50_s": pct([r["timings"]["total_s"] for r in ok], 0.50),
                 "latency_p95_s": pct([r["timings"]["total_s"] for r in ok], 0.95),
                 "avg_logprob_mean": mean([r["signals"]["avg_logprob"] for r in ok]),
